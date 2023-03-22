@@ -65,34 +65,52 @@ pub struct Cli {
 pub fn parse_size_string(size_string: &str) -> Result<NonZeroUsize, String> {
     match size_string.parse() {
         // The input was a number, interpret it as the number of bytes if nonzero.
-        Ok(t) => NonZeroUsize::new(t).ok_or_else(|| "zero is not a valid value".into()),
-        // The input was more than just a number
+        Ok(t) => NonZeroUsize::new(t).ok_or_else(|| "zero is not a valid value".to_owned()),
+        // The input was more than just an integer
         Err(_) => {
-            // Find index of first suffix letter
-            let (number, suffix) = size_string.split_at(
-                size_string
-                    .chars()
-                    .position(|c| !c.is_ascii_digit() && c != '.')
-                    .expect("in this match arm there should be some non-digit in the string"),
-            );
+            let (number, suffix) = match size_string
+                .chars()
+                .position(|c| !c.is_ascii_digit() && c != '.')
+            {
+                Some(index) => Ok(size_string.split_at(index)),
+                None => Err("you need to specify a suffix to use non-integer numbers".to_owned()),
+            }?;
 
             let mut num_bytes: f64 = number
                 .parse()
                 .map_err(|_| format!("could not interpret '{number}' as a number"))?;
 
-            for c in suffix.chars() {
-                num_bytes *= parse_memory_modifier(c)?;
+            let mut chars: Vec<char> = suffix.chars().collect();
+            let original_suffix_len = chars.len();
+
+            if original_suffix_len > 2 {
+                return Err("the suffix is too long, it can be at most two letters".to_owned());
             }
 
-            NonZeroUsize::new(num_bytes as usize).ok_or_else(|| "zero is not a valid value".into())
+            match chars.pop() {
+                Some(ending) => {
+                    if ending == 'B' || (ending == 'b' && original_suffix_len == 2) {
+                        if let Some(si_prefix) = chars.pop() {
+                            num_bytes *= parse_si_prefix(si_prefix)?;
+                        }
+                        if ending == 'b' {
+                            num_bytes /= 8.0;
+                        }
+                    } else {
+                        return Err("the suffix must end with either 'B' or 'b' and be two characters long".to_owned());
+                    }
+                }
+                // No suffix
+                None => (),
+            }
+
+            NonZeroUsize::new(num_bytes as usize).ok_or_else(|| "too small".to_owned())
         }
     }
 }
 
-fn parse_memory_modifier(c: char) -> Result<f64, String> {
-    if c == 'B' {
-        Ok(1.0)
-    } else if c == 'k' {
+fn parse_si_prefix(c: char) -> Result<f64, String> {
+    if c == 'k' {
         Ok(1e3)
     } else if c == 'M' {
         Ok(1e6)
@@ -110,7 +128,7 @@ fn parse_memory_modifier(c: char) -> Result<f64, String> {
     } else if c == 'Y' {
         Ok(1e24)
     } else {
-        Err(format!("'{c}' is an unsupported suffix component"))
+        Err(format!("'{c}' is an unsupported si prefix"))
     }
 }
 
