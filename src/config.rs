@@ -25,14 +25,14 @@ pub enum AllocationMode {
 ))]
 pub struct Cli {
     #[arg(short, long, value_parser(parse_size_string))]
-    /// The size of the memory to monitor for bit flips, understands e.g. 200, 5kB, 2GB and 3MB.
+    /// The size of the memory to monitor for bit flips, understands e.g. 200, 5kB, 2GB and 3Mb.
     /// If no suffix is given the program will assume that the given number is the number of bytes to monitor.
     pub memory_to_monitor: Option<NonZeroUsize>,
 
     // There is a difference between free and available memory,
     // and on most operating systems we can detect this difference.
     // This option lets the user specify which alternative they mean.
-    #[cfg(all(not(windows), not(freebsd)))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "freebsd")))]
     #[arg(long, value_enum, value_name = "ALLOCATION_MODE")]
     /// Allocate as much memory as possible to the detector.
     /// If "free" is specified the program will allocate all currently unused memory,
@@ -42,7 +42,7 @@ pub struct Cli {
 
     // On Windows and FreeBSD there is no way to differentiate free and available memory,
     // so we just allocate as much as the OS gives us.
-    #[cfg(any(windows, freebsd))]
+    #[cfg(any(target_os = "windows", target_os = "freebsd"))]
     #[arg(long)]
     /// Allocate as much memory as possible to the detector.
     pub use_all: bool,
@@ -68,6 +68,7 @@ pub fn parse_size_string(size_string: &str) -> Result<NonZeroUsize, String> {
         Ok(t) => NonZeroUsize::new(t).ok_or_else(|| "zero is not a valid value".to_owned()),
         // The input was more than just an integer
         Err(_) => {
+            // We begin by splitting the string into the number and the suffix.
             let (number, suffix) = match size_string
                 .chars()
                 .position(|c| !c.is_ascii_digit() && c != '.')
@@ -76,35 +77,37 @@ pub fn parse_size_string(size_string: &str) -> Result<NonZeroUsize, String> {
                 None => Err("you need to specify a suffix to use non-integer numbers".to_owned()),
             }?;
 
+            // Parse the number part
             let mut num_bytes: f64 = number
                 .parse()
                 .map_err(|_| format!("could not interpret '{number}' as a number"))?;
 
-            let mut chars: Vec<char> = suffix.chars().collect();
-            let original_suffix_len = chars.len();
-
-            if original_suffix_len > 2 {
-                return Err("the suffix is too long, it can be at most two letters".to_owned());
+            if suffix.len() > 2 {
+                return Err("the suffix can be at most two letters long".to_owned());
             }
 
-            match chars.pop() {
-                Some(ending) => {
-                    if ending == 'B' || (ending == 'b' && original_suffix_len == 2) {
-                        if let Some(si_prefix) = chars.pop() {
-                            num_bytes *= parse_si_prefix(si_prefix)?;
-                        }
-                        if ending == 'b' {
-                            num_bytes /= 8.0;
-                        }
-                    } else {
-                        return Err("the suffix must end with either 'B' or 'b' and be two characters long".to_owned());
+            let mut chars = suffix.chars().rev();
+
+            if let Some(ending) = chars.next() {
+                if ending == 'B' {
+                    if let Some(si_prefix) = chars.next() {
+                        num_bytes *= parse_si_prefix(si_prefix)?;
                     }
+                } else if ending == 'b' {
+                    let si_prefix = chars.next().ok_or_else(|| {
+                        "if the suffix ends with 'b' it must be two characters long".to_owned()
+                    })?;
+
+                    num_bytes *= parse_si_prefix(si_prefix)? / 8.0;
+                } else {
+                    return Err(format!(
+                        "the suffix must end with either 'B' or 'b', not '{ending}'"
+                    ));
                 }
-                // No suffix
-                None => (),
             }
 
-            NonZeroUsize::new(num_bytes as usize).ok_or_else(|| "too small".to_owned())
+            NonZeroUsize::new(num_bytes as usize)
+                .ok_or_else(|| "the size must be at least one byte".to_owned())
         }
     }
 }
@@ -128,7 +131,7 @@ fn parse_si_prefix(c: char) -> Result<f64, String> {
     } else if c == 'Y' {
         Ok(1e24)
     } else {
-        Err(format!("'{c}' is an unsupported si prefix"))
+        Err(format!("'{c}' is not a supported SI prefix"))
     }
 }
 
@@ -141,7 +144,13 @@ fn parse_delay_string(s: &str) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod test {
-    use super::parse_size_string;
+    use super::*;
+
+    #[test]
+    fn verify_cli() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert()
+    }
 
     #[test]
     fn check_memory_parsing() {
