@@ -40,7 +40,7 @@ pub struct Cli {
     /// but haven't been used in a while.
     pub use_all: Option<AllocationMode>,
 
-    // On Windows and FreeBSD there is no way to differentiate free and available memory,
+    // On Windows and FreeBSD sysinfo has no way to differentiate free and available memory,
     // so we just allocate as much as the OS gives us.
     #[cfg(any(target_os = "windows", target_os = "freebsd"))]
     #[arg(long)]
